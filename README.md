@@ -47,6 +47,11 @@ RISK_WEBHOOK_SECRET=dev-secret uv run python scripts/webhook_receiver.py
 # terminal 2: run the agent from the CLI
 uv run risk-monitor examples/transactions.json
 
+# see every step (LLM calls, tool calls, webhook results) in the console
+uv run risk-monitor examples/transactions.json --trace
+# same, but pause before each step until you press Enter
+uv run risk-monitor examples/transactions.json --step
+
 # or as the AgentCore HTTP service
 uv run python -m risk_monitor.agentcore_app
 curl -X POST localhost:8080/invocations -H 'Content-Type: application/json' -d @examples/transactions.json

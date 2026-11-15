@@ -143,3 +143,29 @@ def test_webhook_rejects_plain_http():
 def test_input_validation(payload):
     with pytest.raises(ValidationError):
         run_risk_monitor(payload, model=ScriptedModel([]))
+
+
+def test_console_tracer_prints_each_step(capsys):
+    from risk_monitor.trace import ConsoleTracer
+
+    model = ScriptedModel(
+        [
+            [{"id": "1", "name": "get_customer_profile", "input": {"customer_id": "c-100"}}],
+            [{"text": "All clear."}],
+        ]
+    )
+    webhook, _ = recording_webhook()
+    run_risk_monitor(SAMPLE, model=model, webhook=webhook, hooks=[ConsoleTracer()])
+    err = capsys.readouterr().err
+    for expected in [
+        "Step 1: Agent started",
+        "12 transactions from 4 customers",
+        "Asking the LLM (call #1)",
+        "wants to call get_customer_profile",
+        "Running tool get_customer_profile",
+        "✓ result",
+        "Asking the LLM (call #2)",
+        "💬 All clear.",
+        "Agent finished",
+    ]:
+        assert expected in err, expected

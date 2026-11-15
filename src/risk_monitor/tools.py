@@ -83,8 +83,11 @@ def notify_risk_team(
     except ValueError:
         return {"error": f"risk_level must be one of {[l.value for l in RiskLevel]}"}
     alerts: dict[str, Alert] = state["alerts"]
-    if transaction_id in alerts:
-        return {"status": "already_notified"}
+    # Strands runs parallel tool calls concurrently, so check-and-claim must be atomic.
+    with state["lock"]:
+        if transaction_id in state["claimed"]:
+            return {"status": "already_notified"}
+        state["claimed"].add(transaction_id)
 
     reasons = [r.strip()[:300] for r in reasons if r.strip()][:10]
     result = state["webhook"].send(

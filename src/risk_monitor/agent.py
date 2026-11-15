@@ -2,9 +2,11 @@
 
 import json
 import os
+import threading
 
 from botocore.config import Config
 from strands import Agent
+from strands.hooks import HookProvider
 from strands.models import BedrockModel, Model
 
 from .models import Alert, RiskReport, RiskRequest
@@ -65,6 +67,7 @@ def run_risk_monitor(
     payload: dict,
     model: Model | None = None,
     webhook: WebhookClient | None = None,
+    hooks: list[HookProvider] | None = None,
 ) -> RiskReport:
     """Validate the input, run the agent, and assemble a report from what the tools recorded."""
     request = RiskRequest.model_validate(payload)
@@ -75,6 +78,7 @@ def run_risk_monitor(
         system_prompt=SYSTEM_PROMPT,
         tools=[get_customer_profile, notify_risk_team],
         callback_handler=None,
+        hooks=hooks,
     )
     batch = [t.model_dump(mode="json") for t in request.transactions]
     result = agent(
@@ -82,6 +86,8 @@ def run_risk_monitor(
         invocation_state={
             "transactions": {t.transaction_id: t for t in request.transactions},
             "alerts": alerts,
+            "claimed": set(),
+            "lock": threading.Lock(),
             "webhook": webhook or WebhookClient(),
         },
     )
