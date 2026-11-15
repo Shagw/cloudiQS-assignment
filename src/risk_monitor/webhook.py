@@ -46,7 +46,7 @@ class WebhookClient:
     def send(self, payload: dict) -> DeliveryResult:
         if not self.url:
             return DeliveryResult(False, error="RISK_WEBHOOK_URL is not configured")
-        if not self.url.startswith("https://") and not _is_local(self.url):
+        if not self.url.startswith("https://") and not (_is_local(self.url) or _insecure_allowed()):
             return DeliveryResult(False, error="webhook URL must use https")
 
         body = json.dumps(payload, separators=(",", ":"), sort_keys=True, default=str).encode()
@@ -77,3 +77,8 @@ class WebhookClient:
 def _is_local(url: str) -> bool:
     host = httpx.URL(url).host
     return host in {"localhost", "127.0.0.1"}
+
+
+def _insecure_allowed() -> bool:
+    # For a receiver on a private Docker network; never set this in production.
+    return os.environ.get("RISK_WEBHOOK_ALLOW_INSECURE") == "true"

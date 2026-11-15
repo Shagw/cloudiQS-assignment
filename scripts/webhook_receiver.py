@@ -26,7 +26,7 @@ class Handler(BaseHTTPRequestHandler):
                 print("REJECTED: bad signature")
                 return
         alert = json.loads(body)
-        print(f"[{alert['risk_level'].upper()}] {alert['transaction']['transaction_id']}: {'; '.join(alert['reasons'])}")
+        print(f"[{alert['risk_level'].upper()}] {alert['transaction']['transaction_id']}: {'; '.join(alert['reasons'])}", flush=True)
         self.send_response(204)
         self.end_headers()
 
@@ -35,6 +35,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
+    host = os.environ.get("HOST", "127.0.0.1")
     port = int(os.environ.get("PORT", 9000))
-    print(f"listening on http://localhost:{port} (signature check {'on' if SECRET else 'OFF'})")
-    HTTPServer(("127.0.0.1", port), Handler).serve_forever()
+    print(f"listening on http://{host}:{port} (signature check {'on' if SECRET else 'OFF'})", flush=True)
+    HTTPServer((host, port), Handler).serve_forever()

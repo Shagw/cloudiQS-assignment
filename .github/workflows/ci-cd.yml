@@ -1,0 +1,121 @@
+# test → build → deploy
+#
+# Every push and PR runs the tests and builds the image. A push to main also publishes the
+# image to GHCR and deploys it to the self-hosted runner (Docker Compose), then smoke-tests
+# the running service and rolls back if the check fails.
+#
+# How a change reaches the running deployment:
+#   - prompt (src/risk_monitor/prompts/) or code  → new image tagged with the commit SHA → redeployed
+#   - config (config/agent.env)                   → checked out on the runner → container recreated
+#   GET /version on the deployment reports git_sha and prompt_sha, so you can confirm it landed.
+
+name: ci-cd
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-cd-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.12.10"
+          enable-cache: true
+      - name: Install dependencies
+        run: uv sync --frozen --extra groq
+      - name: Run tests
+        run: uv run pytest -v
+
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ steps.meta.outputs.image }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: meta
+        name: Compute image name
+        # GHCR requires lowercase names.
+        run: echo "image=ghcr.io/${GITHUB_REPOSITORY,,}:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        if: github.event_name != 'pull_request'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build (and push on main)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          # amd64 for cloud hosts, arm64 for the Apple Silicon deploy target.
+          platforms: linux/amd64,linux/arm64
+          build-args: GIT_SHA=${{ github.sha }}
+          tags: ${{ steps.meta.outputs.image }}
+          push: ${{ github.event_name != 'pull_request' }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    # Only trusted pushes to main reach the self-hosted machine; PRs never do.
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: [self-hosted, macOS, risk-monitor-deploy]
+    environment: production
+    permissions:
+      contents: read
+      packages: read
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    env:
+      IMAGE: ${{ needs.build.outputs.image }}
+      GIT_SHA: ${{ github.sha }}
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      RISK_WEBHOOK_SECRET: ${{ secrets.RISK_WEBHOOK_SECRET }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Remember the currently running image (for rollback)
+        id: previous
+        run: |
+          prev=$(docker inspect --format '{{.Config.Image}}' risk-monitor-risk-monitor-1 2>/dev/null || true)
+          echo "image=$prev" >> "$GITHUB_OUTPUT"
+          echo "previous image: ${prev:-none}"
+      - name: Deploy
+        run: |
+          docker compose pull
+          docker compose up -d --no-build --remove-orphans --wait --wait-timeout 90
+          docker compose ps
+      - name: Smoke test
+        run: scripts/smoke_test.sh "$GIT_SHA"
+      - name: Roll back on failure
+        if: failure() && steps.previous.outputs.image != ''
+        env:
+          IMAGE: ${{ steps.previous.outputs.image }}
+        run: |
+          echo "::warning::Deploy failed, rolling back to $IMAGE"
+          docker compose up -d --no-build --wait --wait-timeout 90
+      - name: Show logs on failure
+        if: failure()
+        run: docker compose logs --tail 100

@@ -1,0 +1,44 @@
+# Local deployment: the agent API plus a webhook receiver standing in for the risk team.
+#
+#   docker compose up -d --build                  # build from source and start
+#   IMAGE=ghcr.io/<owner>/<repo>:<sha> docker compose up -d --no-build   # run a CI-built image
+#
+# Secrets (GROQ_API_KEY, RISK_WEBHOOK_SECRET) come from the shell or from .env in this folder.
+
+name: risk-monitor
+
+services:
+  risk-monitor:
+    image: ${IMAGE:-risk-monitor:local}
+    build:
+      context: .
+      args:
+        GIT_SHA: ${GIT_SHA:-dev}
+    env_file: config/agent.env          # non-secret config, versioned in git
+    environment:
+      GROQ_API_KEY: ${GROQ_API_KEY:?set GROQ_API_KEY in .env or the environment}
+      RISK_WEBHOOK_SECRET: ${RISK_WEBHOOK_SECRET:?set RISK_WEBHOOK_SECRET in .env or the environment}
+      RISK_WEBHOOK_URL: http://webhook-receiver:9000
+      RISK_WEBHOOK_ALLOW_INSECURE: "true"   # receiver is only reachable on the private compose network
+    ports:
+      - "127.0.0.1:8080:8080"           # localhost only; not exposed to your LAN
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    depends_on: [webhook-receiver]
+    restart: unless-stopped
+
+  webhook-receiver:
+    image: ${IMAGE:-risk-monitor:local}
+    command: ["python", "scripts/webhook_receiver.py"]
+    environment:
+      HOST: 0.0.0.0
+      PORT: "9000"
+      RISK_WEBHOOK_SECRET: ${RISK_WEBHOOK_SECRET:?set RISK_WEBHOOK_SECRET in .env or the environment}
+    healthcheck:
+      disable: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped
