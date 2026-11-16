@@ -91,6 +91,15 @@ jobs:
       RISK_WEBHOOK_SECRET: ${{ secrets.RISK_WEBHOOK_SECRET }}
     steps:
       - uses: actions/checkout@v4
+      - name: Use a job-local Docker config
+        # The runner is a background service and can't unlock the macOS Keychain that Docker
+        # Desktop stores logins in, so keep this job's registry login in a temp file instead.
+        run: |
+          cfg="$RUNNER_TEMP/docker-config"
+          mkdir -p "$cfg"
+          printf '{"cliPluginsExtraDirs":["%s/.docker/cli-plugins"]}\n' "$HOME" > "$cfg/config.json"
+          echo "DOCKER_CONFIG=$cfg" >> "$GITHUB_ENV"
+          echo "DOCKER_HOST=unix://$HOME/.docker/run/docker.sock" >> "$GITHUB_ENV"
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
