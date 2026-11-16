@@ -41,7 +41,7 @@ def invoke(payload: dict) -> dict:
     try:
         return run_risk_monitor(payload).model_dump(mode="json")
     except ValidationError as e:
-        return {"error": "invalid_input", "details": e.errors(include_url=False, include_input=False)}
+        return {"error": "invalid_input", "details": e.errors(include_url=False, include_input=False, include_context=False)}
 
 
 if __name__ == "__main__":

@@ -1,0 +1,8 @@
+transaction_id,customer_id,amount,merchant,timestamp,currency
+n001,c-500,12.99,Spotify,2026-11-16T09:00:00Z,USD
+n002,c-500,35.40,Uber,2026-11-16T12:30:00Z,USD
+n003,c-500,2500.00,Western Union Wire,2026-11-16T02:45:00Z,USD
+n004,c-600,200.00,Steam Gift Cards,2026-11-16T14:00:00Z,USD
+n005,c-600,200.00,Steam Gift Cards,2026-11-16T14:00:40Z,USD
+n006,c-600,200.00,Steam Gift Cards,2026-11-16T14:01:15Z,USD
+n007,c-700,64.10,Trader Joe's,2026-11-16T18:20:00Z,USD

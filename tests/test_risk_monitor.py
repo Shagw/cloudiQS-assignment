@@ -169,3 +169,12 @@ def test_console_tracer_prints_each_step(capsys):
         "Agent finished",
     ]:
         assert expected in err, expected
+
+
+def test_api_validation_errors_are_json_serializable():
+    from risk_monitor.agentcore_app import invoke
+
+    bad = {"transactions": [{**SAMPLE["transactions"][0], "amount": -5, "timestamp": "2026-11-14T10:00:00"}]}
+    body = json.loads(json.dumps(invoke(bad)))  # raises if pydantic objects leak into the response
+    assert body["error"] == "invalid_input"
+    assert {tuple(d["loc"])[-1] for d in body["details"]} == {"amount", "timestamp"}

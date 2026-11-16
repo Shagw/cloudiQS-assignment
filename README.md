@@ -79,6 +79,14 @@ scripts/smoke_test.sh                         # health + version + validation + 
 docker compose down
 ```
 
+### Sending your own transactions (JSON or CSV)
+```bash
+scripts/check.sh examples/transactions.csv               # or any .json / .csv file
+scripts/check.sh my_data.json -o report.json             # also save the full report
+RISK_API_URL=https://my-host scripts/check.sh data.csv   # target another deployment
+```
+CSV needs a header row: `transaction_id,customer_id,amount,merchant,timestamp[,currency]`. Files with more than 500 transactions are split into batches automatically, and each customer's transactions stay in the same batch so the agent sees their full history.
+
 Container hardening: a multi-stage build that ships no build tools, a non-root user, a read-only root filesystem, all Linux capabilities dropped, `no-new-privileges`, the port bound to localhost only, and secrets injected at runtime rather than baked into the image.
 
 ### Configuration
@@ -138,3 +146,41 @@ Output:
   "summary": "..."
 }
 ```
+
+## Part 4: Written answers
+
+### 1. Updating the prompt without breaking existing users
+
+The prompt is kept in its own file (`src/risk_monitor/prompts/system_prompt.md`), so any change goes through git like normal code. Every build creates a Docker image tagged with the commit SHA, and `/version` returns the `git_sha` and a hash of the prompt (`prompt_sha`), so I can always check which version is live. The response format is fixed by a Pydantic model, so changing the prompt can change what gets flagged, but not the shape of the JSON that users receive.
+
+For versioning I would treat the API and the prompt separately. The API (request/response format) gets versions like `/v1`, `/v2`. Only additive changes go into the same version. The prompt and model are more of a behaviour version, which users can see through `/version`.
+
+Before shipping a prompt change I would:
+- run the new prompt against a set of transactions where we already know the right answer, and compare the results with the current prompt. My unit tests use a fake LLM, so they test the code but not the quality of the AI's decisions.
+- run the new version next to the old one on real traffic for a while without sending webhooks, and compare what each one flags
+- then move traffic over slowly, or let one customer try it first
+- turn on required reviewers for the `production` environment in GitHub, so a deploy needs someone's approval (not enabled in this repo yet)
+
+### 2. Rolling back when the new version gives false positives
+
+Old images stay in GHCR under their commit SHA, so the quickest rollback is to start the previous one again. No rebuild needed:
+
+```bash
+IMAGE=ghcr.io/shagw/cloudiqs-assignment:<last-good-sha> docker compose up -d --no-build --wait
+curl localhost:8080/version   # check the old git_sha / prompt_sha is back
+```
+
+After that I would `git revert` the bad commit and push, so main matches what is running and the pipeline redeploys it properly.
+
+The pipeline already rolls back automatically if the smoke test fails after a deploy. But false positives won't fail a smoke test, because the service is still working, just making bad calls. To catch that, I would track the flag rate (flagged / reviewed) per version and send an alert if it suddenly goes up.
+
+### 3. Keeping two customers separate
+
+With only two customers, I would give each one their own deployment: separate container, separate env file, their own webhook URL and secret, and separate logs. Nothing is shared, so one customer's data can't end up in the other's results. With this setup it's just config, e.g. `docker compose -p customer-a --env-file customer-a.env up -d`.
+
+If both had to share one deployment:
+- each customer gets their own API key, and the server works out who the customer is from the key, not from anything in the request body
+- the webhook URL and secret are looked up per customer from a secrets store (like AWS Secrets Manager), never taken from the request, so nobody can redirect alerts
+- the agent already starts fresh for every request. The tools only see the transactions in that request, and nothing is remembered between requests, so there's no shared memory between customers. On AgentCore Runtime each session also runs in its own isolated microVM.
+- results are currently just returned in the response, not stored. If we stored them, every record would have a `tenant_id` and access would be restricted per customer at the database level.
+- rate limits per customer, so one can't use up all the LLM capacity
