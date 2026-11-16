@@ -1,11 +1,11 @@
 # Risk Monitor Agent
 
-A [Strands](https://strandsagents.com) agent on Amazon Bedrock that reviews a batch of transactions, uses an LLM to decide which ones look suspicious, sends each suspicious one to the risk team's webhook, and returns a summary. It is packaged for Bedrock AgentCore Runtime.
+A [Strands](https://strandsagents.com) agent that reviews a batch of transactions, uses an LLM to decide which ones look suspicious, sends each suspicious one to the risk team's webhook, and returns a summary. It runs on Amazon Bedrock (Claude) or Groq, and is packaged for Bedrock AgentCore Runtime.
 
 ## How it works
 
 ```
-payload ──► pydantic validation ──► Strands Agent (Claude on Bedrock)
+payload ──► pydantic validation ──► Strands Agent (LLM: Bedrock or Groq)
                                         │
                      ┌──────────────────┴──────────────────┐
          get_customer_profile(customer_id)      notify_risk_team(txn_id, level, reasons)
@@ -30,30 +30,49 @@ payload ──► pydantic validation ──► Strands Agent (Claude on Bedrock
 
 ## Setup
 
+### Prerequisites
+- [uv](https://docs.astral.sh/uv/) (installs Python 3.12 and the dependencies for you)
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/), for Part 2
+- An LLM: a [Groq](https://console.groq.com) API key (what the deployment uses now), **or** an AWS account with Bedrock model access
+
+### Steps
 ```bash
-uv sync
-export AWS_REGION=us-east-1                       # a region where your Claude model is enabled
-export BEDROCK_MODEL_ID=us.anthropic.claude-opus-5-5 # US cross-region inference profile
-export RISK_WEBHOOK_URL=http://localhost:9000
-export RISK_WEBHOOK_SECRET=dev-secret
+git clone https://github.com/Shagw/cloudiQS-assignment.git
+cd cloudiQS-assignment
+uv sync --extra groq          # installs dependencies (the groq extra adds the OpenAI-compatible client)
+cp .env.example .env          # then edit .env and put in your real GROQ_API_KEY and a webhook secret
+uv run pytest                 # optional: 11 offline tests, no API key needed
 ```
+
+### Choosing the LLM
+The provider is set in `config/agent.env`:
+
+| Provider | Settings |
+|---|---|
+| Groq (current) | `LLM_PROVIDER=groq`, `GROQ_MODEL_ID=openai/gpt-oss-120b`, plus `GROQ_API_KEY` in `.env` |
+| Amazon Bedrock | `LLM_PROVIDER=bedrock`, `BEDROCK_MODEL_ID=us.anthropic.claude-opus-5-5`, `AWS_REGION=us-east-1`, plus AWS credentials (`aws configure`) and model access enabled in the Bedrock console |
+
+The agent is built for Bedrock, but my new AWS account is still waiting for Bedrock model access from AWS Support, so for now it is tested and deployed with Groq. Switching to Bedrock is a one-line change in `config/agent.env` pushed through the pipeline.
 
 ## Run locally
 
 ```bash
+# load the config and secrets into your shell (do this in every new terminal)
+set -a; source config/agent.env; source .env; set +a
+
 # terminal 1: a webhook receiver that checks the signature and prints alerts
-RISK_WEBHOOK_SECRET=dev-secret uv run python scripts/webhook_receiver.py
+uv run python scripts/webhook_receiver.py
 
 # terminal 2: run the agent from the CLI
-uv run risk-monitor examples/transactions.json
+uv run --extra groq risk-monitor examples/transactions.json
 
 # see every step (LLM calls, tool calls, webhook results) in the console
-uv run risk-monitor examples/transactions.json --trace
+uv run --extra groq risk-monitor examples/transactions.json --trace
 # same, but pause before each step until you press Enter
-uv run risk-monitor examples/transactions.json --step
+uv run --extra groq risk-monitor examples/transactions.json --step
 
 # or as the AgentCore HTTP service
-uv run python -m risk_monitor.agentcore_app
+uv run --extra groq python -m risk_monitor.agentcore_app
 curl -X POST localhost:8080/invocations -H 'Content-Type: application/json' -d @examples/transactions.json
 ```
 
@@ -122,7 +141,7 @@ push / PR ─► test ─► build ───────────────
 ### One-time setup
 1. **Secrets** (repo → Settings → Secrets and variables → Actions): `GROQ_API_KEY`, `RISK_WEBHOOK_SECRET`.
 2. **Environment** (Settings → Environments): create `production`. Optionally add required reviewers so a human approves each deploy.
-3. **Self-hosted runner** (Settings → Actions → Runners → New self-hosted runner → macOS ARM64): follow GitHub's download and `config.sh` steps, adding `--labels risk-monitor-deploy`, then `./run.sh`. Docker Desktop must be running.
+3. **Self-hosted runner** (Settings → Actions → Runners → New self-hosted runner → macOS ARM64): follow GitHub's download and `config.sh` steps, adding `--labels risk-monitor-deploy`, then `./svc.sh install && ./svc.sh start` to run it in the background as a service (or `./run.sh` to run it in a terminal). Docker Desktop must be running.
 4. **Fork PR safety**: Settings → Actions → General → "Require approval for all external contributors". A self-hosted runner executes workflow code on your machine.
 
 ## Tests
